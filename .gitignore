@@ -1,0 +1,6 @@
+cross-arm64-toolchain/
+jammy-arm64-sysroot/
+bionic-sysroot/
+ubuntu-22.04-arm64-cross-toolchain.tar.gz
+ubuntu-22.04-arm64-sysroot.tar.gz
+ubuntu-18.04-amd64-sysroot.tar.gz
