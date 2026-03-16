@@ -1,6 +1,3 @@
-# Sysroots
-
-```bash
 # ============================================================
 # 1. Ubuntu 18.04 amd64 sysroot (GCC 7 native)
 # ============================================================
@@ -38,7 +35,17 @@ sudo debootstrap --arch=amd64 --variant=minbase \
   jammy cross-arm64-toolchain http://archive.ubuntu.com/ubuntu
 
 sudo mkdir -p cross-arm64-toolchain/usr/lib/gcc-deps
-for lib in libisl.so.23 libmpfr.so.6 libmpc.so.3 libgmp.so.10 libopcodes-2.38-arm64.so libbfd-2.38-arm64.so; do
+# Grab ALL shared libs that GCC/binutils tools might need
+for lib in \
+  libisl.so.23 \
+  libmpfr.so.6 \
+  libmpc.so.3 \
+  libgmp.so.10 \
+  libopcodes-2.38-arm64.so \
+  libbfd-2.38-arm64.so \
+  libctf-arm64.so.0 \
+  libctf-nobfd-arm64.so.0 \
+; do
   sudo cp -a "cross-arm64-toolchain/usr/lib/x86_64-linux-gnu/${lib}"* cross-arm64-toolchain/usr/lib/gcc-deps/ 2>/dev/null || echo "WARN: ${lib} not found"
 done
 
@@ -53,5 +60,3 @@ gh release upload sysroots-v1 \
   ubuntu-22.04-arm64-sysroot.tar.gz \
   ubuntu-22.04-arm64-cross-toolchain.tar.gz \
   --clobber --repo dunv/sysroots
-
-```
