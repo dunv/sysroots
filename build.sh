@@ -58,11 +58,19 @@ fi
 
 # Common dev libraries needed for cross-compiling flutter-pi (KMS/DRM/EGL/GBM
 # direct-rendering Flutter embedder). Added to both target sysroots.
+#
+# libgstreamer1.0-dev + libgstreamer-plugins-base1.0-dev are required because
+# the flutter-pi CMake build has BUILD_GSTREAMER_VIDEO_PLAYER_PLUGIN=ON — the
+# plugin links against libgstreamer-1.0 and libgstvideo-1.0. Runtime decoder
+# plugins (v4l2src, jpegdec from gstreamer1.0-plugins-good) are installed on
+# the cart via the consuming deb's Depends, not in the sysroot.
 FLUTTER_PI_DEPS=(
   libdrm-dev
   libegl1-mesa-dev
   libgbm-dev
   libgles2-mesa-dev
+  libgstreamer1.0-dev
+  libgstreamer-plugins-base1.0-dev
   libinput-dev
   libxkbcommon-dev
   libsystemd-dev
@@ -181,7 +189,7 @@ gh_user() { sudo -u "${SUDO_USER:-$(logname)}" "$GH" "$@"; }
 gh_user release create "$RELEASE_TAG" \
   --repo "$RELEASE_REPO" \
   --title "$RELEASE_TAG" \
-  --notes "Sysroots and arm64 cross-toolchain. Includes flutter-pi cross-build deps (libdrm/EGL/GBM/GLES2/libinput/libxkbcommon/libsystemd/libudev + pkg-config) in both target sysroots." \
+  --notes "Sysroots and arm64 cross-toolchain. Includes flutter-pi cross-build deps in both target sysroots (libdrm / EGL / GBM / GLES2 / gstreamer-1.0 + plugins-base / libinput / libxkbcommon / libsystemd / libudev + pkg-config)." \
   2>/dev/null || true
 
 gh_user release upload "$RELEASE_TAG" \
