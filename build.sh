@@ -31,7 +31,9 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo -E env "PATH=$PATH" bash "$0" "$@"
 fi
 
-RELEASE_TAG="${RELEASE_TAG:-sysroots-v2}"
+# Bumped v2 -> v3 for the arm64 GTK-embedder deps (libgtk-3-dev + wayland).
+# New tag so branches still pinned to v2 aren't clobbered.
+RELEASE_TAG="${RELEASE_TAG:-sysroots-v3}"
 RELEASE_REPO="${RELEASE_REPO:-dunv/sysroots}"
 SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 
@@ -78,6 +80,20 @@ FLUTTER_PI_DEPS=(
   pkg-config
 )
 flutter_pi_csv="$(IFS=, ; echo "${FLUTTER_PI_DEPS[*]}")"
+
+# Official GTK-embedder (flutter_linux) cross-build deps — arm64 sysroot ONLY.
+# The arm64 carts move to the GTK embedder run as a Wayland client on sway;
+# the compiled runner links GTK3 + wayland-client. amd64/bionic stays on
+# flutter-pi (bare KMS), so these are NOT added to the bionic sysroot.
+# libgtk-3-dev pulls the glib/pango/cairo/gdk-pixbuf/atk/harfbuzz/epoxy -dev
+# stack transitively via debootstrap dependency resolution. EGL/GLES/xkbcommon
+# are already present via FLUTTER_PI_DEPS above.
+GTK_DEPS=(
+  libgtk-3-dev
+  libwayland-dev
+  wayland-protocols
+)
+gtk_csv="$(IFS=, ; echo "${GTK_DEPS[*]}")"
 
 banner() { printf '\n========== %s ==========\n' "$*"; }
 
@@ -126,9 +142,32 @@ clean_target jammy-arm64-sysroot
 sudo mkdir -p jammy-arm64-sysroot/nix
 sudo mount --bind /nix jammy-arm64-sysroot/nix
 
+# Under qemu-user the second-stage postinst of some GTK deps (dconf-service)
+# can't run, so debootstrap's *configure* phase fails and leaves those
+# packages "unconfigured". That is harmless for a cross-compile sysroot: we
+# link against the unpacked headers/libs/.pc and never run the packages (the
+# cart uses its own installed GTK at runtime). Tolerate the non-zero exit,
+# then verify the deliverables we actually need were unpacked.
 sudo "$DEBOOTSTRAP" --arch=arm64 --variant=minbase \
-  --include="libc6-dev,linux-libc-dev,libstdc++-11-dev,g++-11,${flutter_pi_csv}" \
-  jammy jammy-arm64-sysroot http://ports.ubuntu.com/ubuntu-ports
+  --include="libc6-dev,linux-libc-dev,libstdc++-11-dev,g++-11,${flutter_pi_csv},${gtk_csv}" \
+  jammy jammy-arm64-sysroot http://ports.ubuntu.com/ubuntu-ports \
+  || echo "WARN: arm64 debootstrap configure incomplete under qemu (expected; verifying unpacked deliverables)"
+
+for pc in gtk+-3.0 wayland-client gstreamer-1.0 gstreamer-app-1.0 egl glesv2; do
+  find jammy-arm64-sysroot/usr -name "${pc}.pc" | grep -q . \
+    || { echo "FATAL: ${pc}.pc missing from arm64 sysroot after debootstrap" >&2; exit 1; }
+done
+
+# x11-common (pulled in by the GTK stack) ships /usr/bin/X11 -> . — a
+# self-referential symlink. Bazel's `usr/bin/**` glob in sysroot_arm64.BUILD
+# follows it into an infinite loop ("Too many levels of symbolic links").
+# These convenience links are useless in a cross sysroot; strip any symlink
+# whose target is "." or "..".
+sudo find jammy-arm64-sysroot -type l | while read -r l; do
+  case "$(readlink "$l")" in
+    .|./|..|../) echo "stripping self-loop symlink: $l"; sudo rm -f "$l" ;;
+  esac
+done
 
 # Tear down the bind mount before tarballing so /nix isn't captured.
 sudo umount jammy-arm64-sysroot/nix
