@@ -31,9 +31,13 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo -E env "PATH=$PATH" bash "$0" "$@"
 fi
 
-# Bumped v2 -> v3 for the arm64 GTK-embedder deps (libgtk-3-dev + wayland).
-# New tag so branches still pinned to v2 aren't clobbered.
-RELEASE_TAG="${RELEASE_TAG:-sysroots-v3}"
+# Bumped v3 -> v4 for the amd64 move from GCC 7 to GCC 8 (rules_go 0.63+ compiles
+# the Go stdlib with -ffile-prefix-map, which GCC only gained in 8). gcc-8 lives in
+# bionic *universe*, hence --components below; bionic has no gcc-9 at all. Both are
+# bionic-native, so the glibc 2.27 floor the amd64 carts need is unchanged.
+# Previously: v2 -> v3 for the arm64 GTK-embedder deps (libgtk-3-dev + wayland).
+# New tag so branches still pinned to v2/v3 aren't clobbered.
+RELEASE_TAG="${RELEASE_TAG:-sysroots-v4}"
 RELEASE_REPO="${RELEASE_REPO:-dunv/sysroots}"
 SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 
@@ -112,12 +116,12 @@ clean_target() {
 }
 
 # ------------------------------------------------------------------
-# 1. Ubuntu 18.04 amd64 sysroot (GCC 7 native + flutter-pi headers)
+# 1. Ubuntu 18.04 amd64 sysroot (GCC 8 native + flutter-pi headers)
 # ------------------------------------------------------------------
 banner "1/3  Ubuntu 18.04 amd64 sysroot"
 clean_target bionic-sysroot
-sudo "$DEBOOTSTRAP" --arch=amd64 --variant=minbase \
-  --include="libc6-dev,linux-libc-dev,libstdc++-7-dev,gcc-7,g++-7,binutils,libisl19,libmpfr6,libmpc3,libgmp10,zlib1g,${flutter_pi_csv}" \
+sudo "$DEBOOTSTRAP" --arch=amd64 --variant=minbase --components=main,universe \
+  --include="libc6-dev,linux-libc-dev,libstdc++-8-dev,gcc-8,g++-8,binutils,libisl19,libmpfr6,libmpc3,libgmp10,zlib1g,${flutter_pi_csv}" \
   bionic bionic-sysroot http://archive.ubuntu.com/ubuntu
 
 sudo mkdir -p bionic-sysroot/usr/lib/gcc-deps
