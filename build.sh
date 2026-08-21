@@ -31,13 +31,16 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo -E env "PATH=$PATH" bash "$0" "$@"
 fi
 
-# Bumped v3 -> v4 for the amd64 move from GCC 7 to GCC 8 (rules_go 0.63+ compiles
+# Bumped v4 -> v5 to take the amd64 gcc-8 from bionic-updates (8.4.0) rather than
+# the release pocket's 8-20180414 pre-8.1 snapshot -- see the phase-1b comment for
+# why that needs a chroot upgrade rather than a debootstrap flag.
+# Previously: v3 -> v4 for the amd64 move from GCC 7 to GCC 8 (rules_go 0.63+ compiles
 # the Go stdlib with -ffile-prefix-map, which GCC only gained in 8). gcc-8 lives in
 # bionic *universe*, hence --components below; bionic has no gcc-9 at all. Both are
 # bionic-native, so the glibc 2.27 floor the amd64 carts need is unchanged.
 # Previously: v2 -> v3 for the arm64 GTK-embedder deps (libgtk-3-dev + wayland).
 # New tag so branches still pinned to v2/v3 aren't clobbered.
-RELEASE_TAG="${RELEASE_TAG:-sysroots-v4}"
+RELEASE_TAG="${RELEASE_TAG:-sysroots-v5}"
 RELEASE_REPO="${RELEASE_REPO:-dunv/sysroots}"
 SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 
@@ -116,13 +119,72 @@ clean_target() {
 }
 
 # ------------------------------------------------------------------
-# 1. Ubuntu 18.04 amd64 sysroot (GCC 8 native + flutter-pi headers)
+# 1. Ubuntu 18.04 amd64 sysroot (GCC 8.4 native + flutter-pi headers)
 # ------------------------------------------------------------------
 banner "1/3  Ubuntu 18.04 amd64 sysroot"
 clean_target bionic-sysroot
 sudo "$DEBOOTSTRAP" --arch=amd64 --variant=minbase --components=main,universe \
   --include="libc6-dev,linux-libc-dev,libstdc++-8-dev,gcc-8,g++-8,binutils,libisl19,libmpfr6,libmpc3,libgmp10,zlib1g,${flutter_pi_csv}" \
   bionic bionic-sysroot http://archive.ubuntu.com/ubuntu
+
+# The release pocket's gcc-8 is 8-20180414-1ubuntu2 -- a snapshot cut before GCC
+# 8.1 was released. bionic-updates carries 8.4.0-1ubuntu1~18.04, which is what an
+# updated 18.04 machine actually runs (its libstdc++6 included), so compiling
+# against it matches the carts rather than pre-dating them.
+#
+# This cannot be done by adding --extra-suites=bionic-updates to the debootstrap
+# above. That was tried and fails: bionic-updates is a sparse overlay -- 51 of the
+# 72 Priority:required packages bionic/main has -- so debootstrap's per-suite
+# batching hands `dpkg --install` an empty argument list, dpkg exits non-zero and
+# takes the script with it, right at "Unpacking the base system". Bootstrapping
+# from the one complete suite and *then* upgrading inside the chroot is the shape
+# that works.
+#
+# Blast radius is deliberately narrow, and measured rather than assumed: naming
+# only the three toolchain packages pulls their matching 8.4.0 deps (gcc-8-base,
+# cpp-8, libgcc-8-dev, libstdc++6, libasan5/libitm1/libubsan1) and leaves
+# everything else alone. libc6 stays at the release-pocket 2.27-3ubuntu1 -- not
+# even a patch bump -- so the 2.27 floor the amd64 carts need is untouched, and
+# binutils stays 2.30-15ubuntu1 so the gcc-deps sonames copied below still
+# resolve. Widening this to apt-get upgrade or dist-upgrade would lose both of
+# those properties.
+#
+# [trusted=yes] because a minbase chroot has no ubuntu-keyring, so apt-get update
+# would fail on signatures. Consistent with the debootstrap above, which already
+# warns "Cannot check Release signature" for the same reason.
+#
+# The chroot invocation needs absolute paths and `env -i`, and this is not
+# cosmetic: this script re-execs itself through `sudo -E env "PATH=$PATH"` so the
+# nix-shell debootstrap/gh stay visible, which means PATH is all /nix/store/...
+# entries that do not exist inside the chroot. `chroot ... env ...` then fails to
+# resolve the bare name with "failed to run command 'env': No such file or
+# directory" (rc=127), even though /usr/bin/env is present in the target.
+banner "1b/3  amd64 toolchain -> bionic-updates (gcc-8 8.4.0)"
+printf '%s\n' \
+  'deb [trusted=yes] http://archive.ubuntu.com/ubuntu bionic main universe' \
+  'deb [trusted=yes] http://archive.ubuntu.com/ubuntu bionic-updates main universe' \
+  | sudo tee bionic-sysroot/etc/apt/sources.list >/dev/null
+sudo cp -fL /etc/resolv.conf bionic-sysroot/etc/resolv.conf
+sudo mount -t proc proc bionic-sysroot/proc
+apt_rc=0
+sudo chroot bionic-sysroot /usr/bin/env -i \
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
+  /bin/sh -c '
+    apt-get -qq update &&
+    apt-get -qq -y --no-install-recommends install gcc-8 g++-8 libstdc++-8-dev &&
+    apt-get -qq clean' || apt_rc=$?
+# Unmount before anything else: tar would otherwise descend into /proc.
+sudo umount -l bionic-sysroot/proc || true
+[ "$apt_rc" -eq 0 ] || { echo "error: toolchain upgrade failed (rc=$apt_rc)" >&2; exit "$apt_rc"; }
+
+# Fail loudly rather than shipping the snapshot by accident.
+gcc8_ver=$(sudo chroot bionic-sysroot /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+  dpkg-query -W -f='${Version}' gcc-8)
+echo "gcc-8 in sysroot: ${gcc8_ver}"
+case "$gcc8_ver" in
+  8.4.0-*) ;;
+  *) echo "error: expected gcc-8 8.4.0-*, got '${gcc8_ver}'" >&2; exit 1 ;;
+esac
 
 sudo mkdir -p bionic-sysroot/usr/lib/gcc-deps
 for lib in libisl.so.19 libmpfr.so.6 libmpc.so.3 libgmp.so.10 libopcodes-2.30-system.so libbfd-2.30-system.so; do
